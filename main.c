@@ -4,32 +4,25 @@
 #include <unistd.h>
 #include <string.h>
 #include <errno.h>
-#include <readline/readline.h>
 
 #define MAX_LINE_LEN 1024
 #define MAX_WORD_NUM 30
 
+static int rage_cnt = 0;
+static int main_pid;
 static int prompt_pid;
 
 void sigint_handler(int signum)
 {
-    kill(prompt_pid, SIGKILL);
-    printf("\n");
     return;
 }
 
 void show_prompt()
 {
-    static int first_time = 1;
-    if (first_time)
-    {
-        // printf("%s", " \e[1;1H\e[2J");
-        first_time = 0;
-    }
     printf("$$ 3230shell ##  ");
 }
 
-int read_command(char *command[30])
+int read_command(char *cmd[30])
 {
     char ch;
     char word[MAX_WORD_NUM + 1][MAX_LINE_LEN + 1];
@@ -37,18 +30,17 @@ int read_command(char *command[30])
     while (i < MAX_LINE_LEN - 1)
     {
         ch = getchar();
-        // int scan_status = scanf("%c", &ch);
         if (ch == ' ')
         {
             word[j][k] = '\0';
-            command[j] = word[j];
+            cmd[j] = word[j];
             j++;
             k = 0;
         }
         else if (ch == '\n')
         {
             word[j][k] = '\0';
-            command[j] = word[j];
+            cmd[j] = word[j];
             return j + 1;
         }
         else
@@ -60,53 +52,88 @@ int read_command(char *command[30])
     }
 }
 
-void interactive_prompt()
+int interactive_prompt()
 {
-    char *command[MAX_WORD_NUM + 1];
-    while (1)
+    char *cmd[MAX_WORD_NUM + 1];
+
+    show_prompt();
+    int cmd_cnt = read_command(cmd);
+    cmd[cmd_cnt] = NULL;
+
+    if (strcmp(cmd[0], "") == 0)
     {
-        show_prompt();
-        int cmd_cnt = read_command(command);
-        command[cmd_cnt] = NULL;
-        int pid = fork();
-        if (pid == -1)
+        return 0;
+    }
+    if (strcmp(cmd[0], "exit") == 0)
+    {
+        if (cmd_cnt != 1)
         {
-            printf("Error: fork failed");
+            printf("3230shell: 'exit' has too many arguments\n");
+            return 1;
         }
-        else if (pid == 0) // child
+        return 100;
+    }
+    if (strcmp(cmd[0], "timeX") == 0)
+    {
+        if (cmd_cnt == 1)
         {
-            int exec_status = execvp(command[0], command);
-            if (errno == ENOENT)
-                printf("3230shell: '%s': No such file or directory\n", command[0]);
-            if (errno == EACCES)
-                printf("3230shell: '%s': Permission denied\n", command[0]);
-        }
-        else // parent
-        {
-            wait(NULL);
+            printf("3230shell: 'timeX' cannot be a standalone command");
+            return 1;
         }
     }
+    int exec_status = execvp(cmd[0], cmd);
+    if (errno == ENOENT)
+        printf("3230shell: '%s': No such file or directory\n", cmd[0]);
+    if (errno == EACCES)
+        printf("3230shell: '%s': Permission denied\n", cmd[0]);
+
+    return 0;
 }
+
 int main(int argc, char **argv)
 {
     signal(SIGINT, sigint_handler);
     while (1)
     {
-        int pid = fork();
+        pid_t pid = fork();
         if (pid == -1)
         {
             printf("Error: fork failed");
         }
         else if (pid == 0) // child
         {
-            interactive_prompt();
+            raise(SIGSTOP);
+            int x = interactive_prompt();
+            exit(x);
         }
         else // parent
         {
+            waitpid(pid, NULL, WUNTRACED);
             prompt_pid = pid;
-            wait(NULL);
+            main_pid = getpid();
+            kill(pid, SIGCONT);
+
+            int status;
+            int child_pid = wait(&status);
+            int exit_status = WEXITSTATUS(status);
+            printf("child [%d] returns: %d\n", child_pid, exit_status);
+            switch (exit_status)
+            {
+            case 0:
+                break;
+            case 1:
+                break;
+            case 15:
+                break;
+            case 100:
+                printf("3230shell: exiting\n");
+                run = 0;
+                break;
+
+            default:
+                break;
+            }
         }
     }
-
     return 0;
 }

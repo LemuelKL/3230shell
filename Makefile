@@ -4,7 +4,7 @@ main.o: main.c
 	$(CC) -c $<
 
 3230shell: main.o
-	$(CC) $^ -o $@ -lreadline
+	$(CC) $^ -o $@
 
 clean:
 	rm $(EXE)
