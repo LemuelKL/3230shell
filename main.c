@@ -8,13 +8,15 @@
 #define MAX_LINE_LEN 1024
 #define MAX_WORD_NUM 30
 
-static int rage_cnt = 0;
 static int main_pid;
 static int prompt_pid;
 
 void sigint_handler(int signum)
 {
-    return;
+    if (getpid() == main_pid)
+        return;
+    printf("\n");
+    exit(0);
 }
 
 void show_prompt()
@@ -90,10 +92,16 @@ int interactive_prompt()
     return 0;
 }
 
+void start_child(int signum)
+{
+    return;
+}
+
 int main(int argc, char **argv)
 {
     signal(SIGINT, sigint_handler);
-    while (1)
+    int run = 1;
+    while (run)
     {
         pid_t pid = fork();
         if (pid == -1)
@@ -102,21 +110,21 @@ int main(int argc, char **argv)
         }
         else if (pid == 0) // child
         {
-            raise(SIGSTOP);
+            signal(SIGUSR1, start_child);
+            pause();
             int x = interactive_prompt();
             exit(x);
         }
         else // parent
         {
-            waitpid(pid, NULL, WUNTRACED);
             prompt_pid = pid;
             main_pid = getpid();
-            kill(pid, SIGCONT);
+            // kill(pid, SIGCONT);
+            kill(pid, SIGUSR1);
 
             int status;
-            int child_pid = wait(&status);
+            int child_pid = waitpid(pid, &status, WUNTRACED);
             int exit_status = WEXITSTATUS(status);
-            printf("child [%d] returns: %d\n", child_pid, exit_status);
             switch (exit_status)
             {
             case 0:
