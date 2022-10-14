@@ -4,25 +4,25 @@
 
 int main(int argc, char *argv[])
 {
-  int letter;
-  int delay = 0;
+    int letter;
+    int delay = 0;
 
-  if (argc > 2)
-  {
-    printf("Usage: ./relay [millisecond]\n");
-    exit(0);
-  }
-  else if (argc == 2)
-  {
-    delay = atoi(argv[1]);
-  }
+    if (argc > 2)
+    {
+        printf("Usage: ./relay [millisecond]\n");
+        exit(0);
+    }
+    else if (argc == 2)
+    {
+        delay = atoi(argv[1]);
+    }
 
-  while ((letter = getchar()) != EOF)
-  {
-    putchar(letter);
-    if (delay)
-      usleep(delay * 1000);
-  }
+    while ((letter = getchar()) != EOF)
+    {
+        putchar(letter);
+        if (delay)
+            usleep(delay * 1000);
+    }
 
-  return 0;
+    return 0;
 }

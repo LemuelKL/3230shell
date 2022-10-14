@@ -3,15 +3,15 @@
 
 int main()
 {
-  char c;
+    char c;
 
-  do
-  {
-    c = getchar();
-    printf("+%c", c);
-  } while ((c != 'z') && (c != EOF));
-  usleep(10000); // sleep for 10 ms
-  printf("\n");
+    do
+    {
+        c = getchar();
+        printf("+%c", c);
+    } while ((c != 'z') && (c != EOF));
+    usleep(10000); // sleep for 10 ms
+    printf("\n");
 
-  return 0;
+    return 0;
 }
