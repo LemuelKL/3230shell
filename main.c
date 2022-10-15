@@ -82,6 +82,26 @@ void sigusr1_handler(int sig)
     }
 }
 
+void close_fd(int fd[][2], int i, int total)
+{
+
+    for (int j = 0; j < total; j++)
+    {
+        if (i == j)
+        {
+            close(fd[j][1]);
+            continue;
+        }
+        if (i + 1 == j)
+        {
+            close(fd[j][0]);
+            continue;
+        }
+        close(fd[j][0]);
+        close(fd[j][1]);
+    }
+}
+
 int main(int argc, char **argv)
 {
     signal(SIGINT, sigint_handler);
@@ -172,14 +192,20 @@ int main(int argc, char **argv)
                     }
                 }
                 // real logic starts here
-                int pipe_cnt = 0;
+                int pipe_sym_cnt = 0;
                 for (int i = 0; i < cmd_cnt; i++)
                 {
                     if (strcmp(cmd[i], "|") == 0)
-                        pipe_cnt++;
+                    {
+                        pipe_sym_cnt++;
+                    }
                 }
-                int fd[5][2]; // assume no more than 5 commands
-                for (int i = 0; i < pipe_cnt + 1; i++)
+                if (pipe_sym_cnt == 0)
+                    exit(0);
+                int cmd_cnt = pipe_sym_cnt + 1;
+                int pipe_cnt = cmd_cnt + 1;
+                int fd[pipe_cnt][2];
+                for (int i = 0; i < pipe_cnt; i++)
                 {
                     if (pipe(fd[i]) == -1)
                     {
@@ -187,22 +213,48 @@ int main(int argc, char **argv)
                         exit(0);
                     }
                 }
-                for (int i = 0; i < pipe_cnt + 1; i++)
+                // Data written to the write end of a pipe can be read from the read end of the pipe.
+                // printf("cmd_cnt: %d\n", cmd_cnt);
+                // printf("pipe_cnt: %d\n", pipe_cnt);
+                for (int i = 0; i < cmd_cnt; i++)
                 {
-                    if (fork() == 0)
+                    int pid = fork();
+                    if (pid == 0)
                     {
-                        printf("[son] pid %d from [parent] pid %d\n", getpid(), getppid());
+                        // printf("i:%d  pid:%d\n", i, getpid());
+                        close_fd(fd, i, cmd_cnt);
+                        int x;
+                        if (read(fd[i][0], &x, sizeof(int)) < 0)
+                            printf("(c) READ ERROR\n");
+                        x += 5;
+                        if (write(fd[i + 1][1], &x, sizeof(int)) < 0)
+                            printf("(c) WRITE ERROR\n");
+                        close(fd[i][0]);
+                        close(fd[i + 1][1]);
                         exit(0);
                     }
                 }
-                for (int i = 0; i < pipe_cnt + 1; i++)
+                for (int i = 0; i <= cmd_cnt; i++)
                 {
-                    wait(NULL);
+                    if (i != cmd_cnt)
+                        close(fd[i][0]);
+                    if (i != 0)
+                        close(fd[i][1]);
                 }
+                int x = 0;
+                if (write(fd[0][1], &x, sizeof(int)) < 0)
+                    printf("(P) WRITE ERROR\n");
+                if (read(fd[cmd_cnt][0], &x, sizeof(int)) < 0)
+                    printf("(P) READ ERROR\n");
+                printf("x = %d\n", x);
+                close(fd[0][1]);
+                close(fd[cmd_cnt][0]);
+
+                int status;
+                int child_id = waitpid(pid, &status, 0);
+                // printf("child_id: %d exit: %d\n", child_id, WEXITSTATUS(status));
                 exit(0); // safety net
             }
-
-            printf("NORMAL COMMAND\n");
             if (execvp(cmd[0], cmd) == -1)
                 printf("3230shell: '%s': %s\n", cmd[0], strerror(errno));
             exit(0);
