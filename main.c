@@ -221,38 +221,51 @@ int main(int argc, char **argv)
                     int pid = fork();
                     if (pid == 0)
                     {
-                        // printf("i:%d  pid:%d\n", i, getpid());
-                        close_fd(fd, i, cmd_cnt);
-                        int x;
-                        if (read(fd[i][0], &x, sizeof(int)) < 0)
-                            printf("(c) READ ERROR\n");
-                        x += 5;
-                        if (write(fd[i + 1][1], &x, sizeof(int)) < 0)
-                            printf("(c) WRITE ERROR\n");
-                        close(fd[i][0]);
-                        close(fd[i + 1][1]);
-                        exit(0);
+                        printf("i:%d  child %d\n", i, getpid());
+                        if (i == 0)
+                        {
+                            close(fd[0][0]);
+                            close(fd[0][1]);
+                            dup2(fd[1][1], STDOUT_FILENO);
+                            close(fd[1][1]);
+                            close(fd[1][0]);
+                            close(fd[2][0]);
+                            close(fd[2][1]);
+                            execlp("ls", "ls", "-l", NULL);
+                        }
+                        if (i == 1) // 1,0 2,1
+                        {
+                            close(fd[0][0]);
+                            close(fd[0][1]);
+                            close(fd[1][1]);
+                            close(fd[2][0]);
+                            dup2(fd[1][0], STDIN_FILENO);
+                            close(fd[1][0]);
+                            dup2(fd[2][1], STDOUT_FILENO);
+                            close(fd[2][1]);
+                            execlp("grep", "grep", "main", NULL);
+                        }
                     }
                 }
-                for (int i = 0; i <= cmd_cnt; i++)
-                {
-                    if (i != cmd_cnt)
-                        close(fd[i][0]);
-                    if (i != 0)
-                        close(fd[i][1]);
-                }
-                int x = 0;
-                if (write(fd[0][1], &x, sizeof(int)) < 0)
-                    printf("(P) WRITE ERROR\n");
-                if (read(fd[cmd_cnt][0], &x, sizeof(int)) < 0)
-                    printf("(P) READ ERROR\n");
-                printf("x = %d\n", x);
+                close(fd[0][0]);
                 close(fd[0][1]);
-                close(fd[cmd_cnt][0]);
-
+                close(fd[1][0]);
+                close(fd[1][1]);
+                close(fd[2][1]); // close the WRITE end of the pipe
+                char buf[1024 * 1024];
+                int b_read = 0;
+                int n = -2;
+                while (n != 0)
+                {
+                    n = read(fd[2][0], buf + b_read, 1);
+                    b_read += n;
+                }
+                buf[b_read] = '\0';
+                printf("%s", buf);
+                close(fd[2][0]);
                 int status;
                 int child_id = waitpid(pid, &status, 0);
-                // printf("child_id: %d exit: %d\n", child_id, WEXITSTATUS(status));
+                printf("child_id: %d exit: %d\n", child_id, WEXITSTATUS(status));
                 exit(0); // safety net
             }
             if (execvp(cmd[0], cmd) == -1)
