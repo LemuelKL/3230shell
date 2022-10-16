@@ -3,7 +3,10 @@
         "*.svelte": "svelte",
         "stdlib.h": "c",
         "typeinfo": "c",
-        "limits": "c"
+        "limits": "c",
+        "wait.h": "c",
+        "errno.h": "c",
+        "fcntl.h": "c"
     },
     "C_Cpp.default.configurationProvider": "ms-vscode.makefile-tools",
     "C_Cpp.errorSquiggles": "Disabled"

@@ -1,5 +1,0 @@
-#!/bin/bash
-
-# make clean
-make 3230shell
-./3230shell
