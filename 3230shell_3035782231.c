@@ -10,12 +10,12 @@
 //   EXPR: EXPR_1 | EXPR_2 | ... | EXPR_N
 // * Pipping supports arbitrary number of expressions that could have arbitrary
 //   number of arguments
-// * For timeX, a grandchild to the shell is forked to run the command, 
+// * For timeX, a grandchild to the shell is forked to run the command,
 //   the middle child waits for the grandchild to finish, then displays the
 //   statistics, and then exit back to main shell.
 //
 ///// COMPLETED FEATURES /////
-// * All non-bonus features
+// * All the bullet points in the grading criteria table
 
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -62,8 +62,9 @@ int read_command(char cmd[MAX_LINE_LEN + 1], char *args[MAX_WORD_NUM + 1], char 
     }
 }
 
+static int prompt_pid = -1;
 static int shell_pid = -1;
-void sigint_handler(int signum)
+void sigint_handler(int sig)
 {
     int pid = getpid();
     int ppid = getppid();
@@ -78,10 +79,41 @@ void sigint_handler(int signum)
     }
 }
 
+static char *proc_name[32768]; // shared by shell loop parent and its sigchld handler
 void sigchld_handler(int sig)
 {
     int status;
-    pid_t pid = wait(&status);
+    struct rusage rusage;
+    pid_t dead_child = wait3(&status, WNOHANG, &rusage);
+
+    char *comm = proc_name[dead_child];
+
+    if (dead_child == -1)
+    {
+        return;
+    }
+    else // background process
+    {
+        while (waitpid(prompt_pid, NULL, WNOHANG) == 0) // to wait for the current prompt to finish
+        {
+            usleep(1);
+        }
+        if (proc_name[dead_child] == NULL) // when the user ^C or entered nothing to the prompt
+        {
+            return;
+        }
+        // since the previous prompt must have finished,
+        // and the next prompt is not started yet (still stuck in this handler),
+        // the followings will be printed before the next prompt
+        if (WIFEXITED(status))
+        {
+            printf("[%d] %s Done\n", dead_child, comm);
+        }
+        else if (WIFSIGNALED(status))
+        {
+            printf("[%d] %s %s\n", dead_child, comm, strsignal(WTERMSIG(status)));
+        }
+    }
 }
 
 volatile sig_atomic_t execute = 0;
@@ -89,6 +121,7 @@ void sigusr1_handler(int sig)
 {
     if (sig == SIGUSR1)
     {
+        prompt_pid = getpid();
         shell_pid = getppid();
         execute = 1;
     }
@@ -189,6 +222,43 @@ void vld_pipe(char **args, int tk_cnt)
 
 void run_pipe(char **args, int tk_cnt, bool timex_md);
 
+bool is_bg_md(char **args, int tk_cnt)
+{
+    for (int i = 0; i < tk_cnt; i++)
+    {
+        if (strcmp(args[i], "&") == 0)
+        {
+            if (i != tk_cnt - 1)
+            {
+                printf("3230shell: '&' must be the last token\n");
+                exit(0);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+void exec_cmd(char *cmd, int tk_cnt, char *raw, char **args, bool timex_md)
+{
+    bool pipe_md = has_pipe_sym(raw);
+    if (pipe_md)
+        vld_pipe(args, tk_cnt);
+    if (timex_md && !pipe_md)
+        timeX(*(args + 1), args + 1);
+    else if (!timex_md && pipe_md)
+        run_pipe(args, tk_cnt, false);
+    else if (timex_md && pipe_md)
+        run_pipe(args + 1, tk_cnt - 1, true);
+    else
+    {
+        int exec_status = execvp(cmd, args);
+        if (exec_status == -1)
+            printf("3230shell: '%s': %s\n", cmd, strerror(errno));
+        exit(0); // just return to main shell loop
+    }
+}
+
 int main(int argc, char **argv)
 {
     signal(SIGINT, sigint_handler);
@@ -199,10 +269,15 @@ int main(int argc, char **argv)
     pid_t pid;
     while (1)
     {
+        int bg_fd[2];
+        pipe(bg_fd); // for child (prompt) to notify parent (shell) that the
+                     // child will be running in background
+        int cmd_fd[2];
+        pipe(cmd_fd); // transfer cmd from child (prompt) to parent (shell)
         pid = fork();
         if (pid == 0)
         {
-            while (!execute) // wait for SIGUSR1
+            while (!execute)
             {
                 pause();
             }
@@ -213,39 +288,61 @@ int main(int argc, char **argv)
             handle_empty(cmd);
             handle_exit(cmd, tk_cnt);
             bool timex_md = handle_timex(cmd, tk_cnt, raw);
-            bool pipe_md = has_pipe_sym(raw);
-            if (pipe_md)
-                vld_pipe(args, tk_cnt);
-            if (timex_md && !pipe_md)
-                timeX(*(args + 1), args + 1);
-            else if (!timex_md && pipe_md)
-                run_pipe(args, tk_cnt, false);
-            else if (timex_md && pipe_md)
-                run_pipe(args + 1, tk_cnt - 1, true);
-            else
+            bool bg_md = is_bg_md(args, tk_cnt);
+            if (bg_md)
             {
-                int exec_status = execvp(cmd, args);
-                if (exec_status == -1)
-                    printf("3230shell: '%s': %s\n", cmd, strerror(errno));
+                args[tk_cnt - 1] = NULL;
+                tk_cnt--;
             }
+
+            close(bg_fd[0]);
+            write(bg_fd[1], &bg_md, sizeof(bool));
+            close(bg_fd[1]);
+
+            close(cmd_fd[0]);
+            write(cmd_fd[1], cmd, MAX_LINE_LEN + 1);
+            close(cmd_fd[1]);
+
+            exec_cmd(cmd, tk_cnt, raw, args, timex_md);
+            exit(0);
         }
         else if (pid > 0)
         {
             shell_pid = getpid(); // set shell_pid before child runs
+            prompt_pid = pid;     // set prompt_pid before child runs
             kill(pid, SIGUSR1);
-            int status;
-            int dead_child = waitpid(pid, &status, 0);
-            if (WIFEXITED(status))
+
+            close(bg_fd[1]);
+            bool bg_md;
+            read(bg_fd[0], &bg_md, sizeof(bool));
+            close(bg_fd[0]);
+
+            close(cmd_fd[1]);
+            char r_cmd[MAX_LINE_LEN + 1];
+            read(cmd_fd[0], r_cmd, MAX_LINE_LEN + 1);
+            close(cmd_fd[0]);
+            if (bg_md)
             {
-                int exit_code = WEXITSTATUS(status);
-                if (exit_code == 100)
-                {
-                    printf("Bye bye!\n");
-                    return 0;
-                }
+                proc_name[pid] = r_cmd;
             }
-            else if (WIFSIGNALED(status))
-                printf("%s\n", strsignal(status));
+
+            // printf("(P) bg_md: %d\n", bg_md);
+            if (!bg_md)
+            {
+                int status;
+                int dead_child = waitpid(pid, &status, WUNTRACED);
+                if (WIFEXITED(status))
+                {
+                    int exit_code = WEXITSTATUS(status);
+                    if (exit_code == 100)
+                    {
+                        printf("Bye bye!\n");
+                        return 0;
+                    }
+                }
+                else if (WIFSIGNALED(status))
+                    printf("%s\n", strsignal(status));
+            }
         }
     }
     return 0;
