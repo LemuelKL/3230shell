@@ -15,6 +15,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>
+#include <fcntl.h>
 
 #define MAX_LINE_LEN 1024
 #define MAX_WORD_NUM 30
@@ -84,24 +85,16 @@ void sigusr1_handler(int sig)
 
 void close_fd(int fd[][2], int i, int total)
 {
-
-    for (int j = 0; j < total; j++)
-    {
-        if (i == j)
-        {
-            close(fd[j][1]);
-            continue;
-        }
-        if (i + 1 == j)
-        {
-            close(fd[j][0]);
-            continue;
-        }
-        close(fd[j][0]);
-        close(fd[j][1]);
-    }
 }
 
+void list_fd(char str[], int fd[][2], int end_idx_incl)
+{
+    for (int i = 0; i <= end_idx_incl; i++)
+    {
+        printf("%s fd[%d][0]: %d\n", str, i, fcntl(fd[i][0], F_GETFD));
+        printf("%s fd[%d][1]: %d\n", str, i, fcntl(fd[i][1], F_GETFD));
+    }
+}
 int main(int argc, char **argv)
 {
     signal(SIGINT, sigint_handler);
@@ -193,17 +186,22 @@ int main(int argc, char **argv)
                 }
                 // real logic starts here
                 int pipe_sym_cnt = 0;
+                int cmd_idx[cmd_cnt];
+                cmd_idx[0] = 0;
                 for (int i = 0; i < cmd_cnt; i++)
                 {
                     if (strcmp(cmd[i], "|") == 0)
                     {
                         pipe_sym_cnt++;
+                        cmd_idx[pipe_sym_cnt] = i + 1;
+
+                        cmd[i] = NULL;
                     }
                 }
                 if (pipe_sym_cnt == 0)
                     exit(0);
                 int cmd_cnt = pipe_sym_cnt + 1;
-                int pipe_cnt = cmd_cnt + 1;
+                int pipe_cnt = cmd_cnt - 1;
                 int fd[pipe_cnt][2];
                 for (int i = 0; i < pipe_cnt; i++)
                 {
@@ -213,59 +211,88 @@ int main(int argc, char **argv)
                         exit(0);
                     }
                 }
-                // Data written to the write end of a pipe can be read from the read end of the pipe.
-                // printf("cmd_cnt: %d\n", cmd_cnt);
-                // printf("pipe_cnt: %d\n", pipe_cnt);
+                int child_pids[cmd_cnt];
                 for (int i = 0; i < cmd_cnt; i++)
                 {
                     int pid = fork();
                     if (pid == 0)
                     {
-                        printf("i:%d  child %d\n", i, getpid());
-                        if (i == 0)
+                        // printf("i:%d  (PID):%d  (PPID):%d\n", i, getpid(), getppid());
+                        if (i == 0) // first cmd
                         {
-                            close(fd[0][0]);
-                            close(fd[0][1]);
-                            dup2(fd[1][1], STDOUT_FILENO);
-                            close(fd[1][1]);
-                            close(fd[1][0]);
-                            close(fd[2][0]);
-                            close(fd[2][1]);
-                            execlp("ls", "ls", "-l", NULL);
+                            close(fd[i][0]); // first cmd does not read
+
+                            // close all other fds[j], j != 0
+                            for (int j = 1; j < pipe_cnt; j++)
+                            {
+                                close(fd[j][0]);
+                                close(fd[j][1]);
+                            }
+
+                            // redirect stdout to fd[0][1]
+                            // data entrance of entire pipe line
+                            dup2(fd[i][1], STDOUT_FILENO);
+                            close(fd[i][1]);
+
+                            execvp(cmd[cmd_idx[i]], cmd + cmd_idx[i]);
                         }
-                        if (i == 1) // 1,0 2,1
+                        else if (i == cmd_cnt - 1) // last cmd
                         {
-                            close(fd[0][0]);
-                            close(fd[0][1]);
-                            close(fd[1][1]);
-                            close(fd[2][0]);
-                            dup2(fd[1][0], STDIN_FILENO);
-                            close(fd[1][0]);
-                            dup2(fd[2][1], STDOUT_FILENO);
-                            close(fd[2][1]);
-                            execlp("grep", "grep", "main", NULL);
+                            for (int j = 0; j < pipe_cnt; j++)
+                            {
+                                close(fd[j][1]);
+                                if (j != i - 1)
+                                    close(fd[j][0]);
+                            }
+
+                            // only read from fd[i-1][0]
+                            dup2(fd[i - 1][0], STDIN_FILENO);
+                            close(fd[i - 1][0]);
+
+                            execvp(cmd[cmd_idx[i]], cmd + cmd_idx[i]);
+                        }
+                        else // middle cmds
+                        {
+                            for (int j = 0; j < pipe_cnt; j++)
+                            {
+                                if (j != i - 1)
+                                    close(fd[j][0]);
+                                if (j != i)
+                                    close(fd[j][1]);
+                            }
+
+                            // only read from fd[i-1][0]
+                            dup2(fd[i - 1][0], STDIN_FILENO);
+                            close(fd[i - 1][0]);
+
+                            // only write to fd[i][1]
+                            dup2(fd[i][1], STDOUT_FILENO);
+                            close(fd[i][1]);
+
+                            execvp(cmd[cmd_idx[i]], cmd + cmd_idx[i]);
                         }
                     }
+                    else
+                    {
+                        child_pids[i] = pid;
+                    }
                 }
-                close(fd[0][0]);
-                close(fd[0][1]);
-                close(fd[1][0]);
-                close(fd[1][1]);
-                close(fd[2][1]); // close the WRITE end of the pipe
-                char buf[1024 * 1024];
-                int b_read = 0;
-                int n = -2;
-                while (n != 0)
+                // leftmost of the pipes is none
+                // WRITE_END of 1st pipe is written by 1st child
+                // rightmost of the pipes is STDOUT
+                // parents have no role to play, close all
+                for (int i = 0; i < cmd_cnt; i++)
                 {
-                    n = read(fd[2][0], buf + b_read, 1);
-                    b_read += n;
+                    close(fd[i][0]);
+                    close(fd[i][1]);
                 }
-                buf[b_read] = '\0';
-                printf("%s", buf);
-                close(fd[2][0]);
-                int status;
-                int child_id = waitpid(pid, &status, 0);
-                printf("child_id: %d exit: %d\n", child_id, WEXITSTATUS(status));
+                for (int i = 0; i < cmd_cnt; i++)
+                {
+                    int status;
+                    // printf("wait for child %d\n", child_pids[i]);
+                    int child_id = waitpid(child_pids[i], &status, 0);
+                    // printf("%d exitted with %d\n", child_id, WEXITSTATUS(status));
+                }
                 exit(0); // safety net
             }
             if (execvp(cmd[0], cmd) == -1)
