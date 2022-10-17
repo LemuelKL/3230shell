@@ -79,7 +79,9 @@ void sigint_handler(int sig)
     }
 }
 
-static char *proc_name[9999999]; // shared by shell loop parent and its sigchld handler
+// shared by shell loop parent and its sigchld handler
+// had to make it big coz workbench2 has tons of processes
+static char *proc_name[9999999];
 void sigchld_handler(int sig)
 {
     // when SIGCHLD is blocked by the shell loop parent, if more than one
@@ -90,14 +92,18 @@ void sigchld_handler(int sig)
     {
         int status;
         pid_t pid = waitpid(-1, &status, WNOHANG);
-        if (pid <= 0)
+        // printf("[SIGCHLD]pid: %d\n", pid);
+        if (pid > 0)
         {
-            return; // do nothing for dead (foreground) or running process
+            // background process
+            printf("[%d] %s Done\n", pid, proc_name[pid]);
+            waitpid(pid, &status, 0);
         }
-        // background process
-        printf("[%d] %s Done\n", pid, proc_name[pid]);
+        else
+        {
+            return;
+        }
     }
-    return;
 }
 
 volatile sig_atomic_t execute = 0;
@@ -243,6 +249,27 @@ void exec_cmd(char *cmd, int tk_cnt, char *raw, char **args, bool timex_md)
     }
 }
 
+void shell_wait(pid_t pid)
+{
+    int status;
+    int dead_child = waitpid(pid, &status, WUNTRACED);
+    if (dead_child == -1)
+    {
+        printf("3230shell: %s\n", strerror(errno)); // shouldn't happen right?
+    }
+    if (WIFEXITED(status))
+    {
+        int exit_code = WEXITSTATUS(status);
+        if (exit_code == 100)
+        {
+            printf("Bye bye!\n");
+            exit(0);
+        }
+    }
+    else if (WIFSIGNALED(status))
+        printf("%s\n", strsignal(WTERMSIG(status)));
+}
+
 int main(int argc, char **argv)
 {
     sigset_t mask;
@@ -251,8 +278,6 @@ int main(int argc, char **argv)
     signal(SIGINT, sigint_handler);
     signal(SIGCHLD, sigchld_handler);
     signal(SIGUSR1, sigusr1_handler);
-    char cmd[MAX_LINE_LEN + 1];
-    char *args[MAX_WORD_NUM + 1];
     pid_t pid;
     while (1)
     {
@@ -262,7 +287,7 @@ int main(int argc, char **argv)
         int cmd_fd[2];
         pipe(cmd_fd); // transfer cmd from child (prompt) to parent (shell)
 
-        // unblock SIGCHLD here so that finished background process can 
+        // unblock SIGCHLD here so that finished background process can
         // be handled by sigchld_handler
         // the handler will print out the finished process
         // all this happends before the next prompt
@@ -279,28 +304,30 @@ int main(int argc, char **argv)
             printf("$$ 3230shell ## ");
             fflush(stdout);
             char raw[MAX_LINE_LEN + 1];
+            char cmd[MAX_LINE_LEN + 1];
+            char *args[MAX_WORD_NUM + 1];
             int tk_cnt = read_command(cmd, args, raw);
             args[tk_cnt] = NULL;
             handle_empty(cmd);
             handle_exit(cmd, tk_cnt);
             bool timex_md = handle_timex(cmd, tk_cnt, raw);
             bool bg_md = is_bg_md(args, tk_cnt);
-            if (bg_md)
+            if (bg_md) // discard the '&' token
             {
                 args[tk_cnt - 1] = NULL;
                 tk_cnt--;
             }
 
+            // write bg_md to parent (shell)
             close(bg_fd[0]);
             write(bg_fd[1], &bg_md, sizeof(bool));
             close(bg_fd[1]);
-
+            // write cmd to parent (shell)
             close(cmd_fd[0]);
             write(cmd_fd[1], cmd, MAX_LINE_LEN + 1);
             close(cmd_fd[1]);
 
             exec_cmd(cmd, tk_cnt, raw, args, timex_md);
-            exit(0);
         }
         else if (pid > 0)
         {
@@ -308,10 +335,22 @@ int main(int argc, char **argv)
             prompt_pid = pid;     // set prompt_pid before child runs
             kill(pid, SIGUSR1);
 
-            close(bg_fd[1]);
+            int r_stat;
             bool bg_md;
-            read(bg_fd[0], &bg_md, sizeof(bool));
+            close(bg_fd[1]);
+            r_stat = read(bg_fd[0], &bg_md, sizeof(bool));
             close(bg_fd[0]);
+
+            // check if child exited before it has written to bg_fd
+            // which implies that no command was executed
+            // if this check is not present, the shell will
+            // shell will infer bg_md and r_cmd incorrectly
+            // causing really weird behaviors
+            if (r_stat <= 0)
+            {
+                shell_wait(pid); // it must not be a background process
+                continue;
+            }
 
             close(cmd_fd[1]);
             char r_cmd[MAX_LINE_LEN + 1];
@@ -319,28 +358,12 @@ int main(int argc, char **argv)
             close(cmd_fd[0]);
             if (bg_md)
             {
+                // for later use by sigchld_handler
                 proc_name[pid] = r_cmd;
             }
-
-            if (!bg_md)
+            else
             {
-                int status;
-                int dead_child = waitpid(pid, &status, WUNTRACED);
-                if (dead_child == -1)
-                {
-                    printf("3230shell: %s\n", strerror(errno));
-                }
-                if (WIFEXITED(status))
-                {
-                    int exit_code = WEXITSTATUS(status);
-                    if (exit_code == 100)
-                    {
-                        printf("Bye bye!\n");
-                        return 0;
-                    }
-                }
-                else if (WIFSIGNALED(status))
-                    printf("%s\n", strsignal(WTERMSIG(status)));
+                shell_wait(pid);
             }
         }
     }
