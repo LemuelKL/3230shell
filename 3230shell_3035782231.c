@@ -15,7 +15,7 @@
 //   statistics, and then exit back to main shell.
 //
 ///// COMPLETED FEATURES /////
-// * All the bullet points in the grading criteria table
+// * All the bullet points in the grading criteria table including bonuses.
 
 #include <sys/resource.h>
 #include <sys/wait.h>
@@ -79,41 +79,25 @@ void sigint_handler(int sig)
     }
 }
 
-static char *proc_name[32768]; // shared by shell loop parent and its sigchld handler
+static char *proc_name[9999999]; // shared by shell loop parent and its sigchld handler
 void sigchld_handler(int sig)
 {
-    int status;
-    struct rusage rusage;
-    pid_t dead_child = wait3(&status, WNOHANG, &rusage);
-
-    char *comm = proc_name[dead_child];
-
-    if (dead_child == -1)
+    // when SIGCHLD is blocked by the shell loop parent, if more than one
+    // handler calls occurr, then when SIGCHLD is unblocked, only one handler
+    // call will be delivered.
+    // so we need to loop until there is no more child process to wait for.
+    while (1)
     {
-        return;
+        int status;
+        pid_t pid = waitpid(-1, &status, WNOHANG);
+        if (pid <= 0)
+        {
+            return; // do nothing for dead (foreground) or running process
+        }
+        // background process
+        printf("[%d] %s Done\n", pid, proc_name[pid]);
     }
-    else // background process
-    {
-        while (waitpid(prompt_pid, NULL, WNOHANG) == 0) // to wait for the current prompt to finish
-        {
-            usleep(1);
-        }
-        if (proc_name[dead_child] == NULL) // when the user ^C or entered nothing to the prompt
-        {
-            return;
-        }
-        // since the previous prompt must have finished,
-        // and the next prompt is not started yet (still stuck in this handler),
-        // the followings will be printed before the next prompt
-        if (WIFEXITED(status))
-        {
-            printf("[%d] %s Done\n", dead_child, comm);
-        }
-        else if (WIFSIGNALED(status))
-        {
-            printf("[%d] %s %s\n", dead_child, comm, strsignal(WTERMSIG(status)));
-        }
-    }
+    return;
 }
 
 volatile sig_atomic_t execute = 0;
@@ -261,6 +245,9 @@ void exec_cmd(char *cmd, int tk_cnt, char *raw, char **args, bool timex_md)
 
 int main(int argc, char **argv)
 {
+    sigset_t mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
     signal(SIGINT, sigint_handler);
     signal(SIGCHLD, sigchld_handler);
     signal(SIGUSR1, sigusr1_handler);
@@ -274,6 +261,14 @@ int main(int argc, char **argv)
                      // child will be running in background
         int cmd_fd[2];
         pipe(cmd_fd); // transfer cmd from child (prompt) to parent (shell)
+
+        // unblock SIGCHLD here so that finished background process can 
+        // be handled by sigchld_handler
+        // the handler will print out the finished process
+        // all this happends before the next prompt
+        sigprocmask(SIG_UNBLOCK, &mask, NULL);
+        sigprocmask(SIG_BLOCK, &mask, NULL); // restart the cycle
+
         pid = fork();
         if (pid == 0)
         {
@@ -282,6 +277,7 @@ int main(int argc, char **argv)
                 pause();
             }
             printf("$$ 3230shell ## ");
+            fflush(stdout);
             char raw[MAX_LINE_LEN + 1];
             int tk_cnt = read_command(cmd, args, raw);
             args[tk_cnt] = NULL;
@@ -326,11 +322,14 @@ int main(int argc, char **argv)
                 proc_name[pid] = r_cmd;
             }
 
-            // printf("(P) bg_md: %d\n", bg_md);
             if (!bg_md)
             {
                 int status;
                 int dead_child = waitpid(pid, &status, WUNTRACED);
+                if (dead_child == -1)
+                {
+                    printf("3230shell: %s\n", strerror(errno));
+                }
                 if (WIFEXITED(status))
                 {
                     int exit_code = WEXITSTATUS(status);
@@ -341,7 +340,7 @@ int main(int argc, char **argv)
                     }
                 }
                 else if (WIFSIGNALED(status))
-                    printf("%s\n", strsignal(status));
+                    printf("%s\n", strsignal(WTERMSIG(status)));
             }
         }
     }
