@@ -79,7 +79,7 @@ void sigint_handler(int sig)
     }
 }
 
-static char *proc_name[32768]; // shared by shell loop parent and its sigchld handler
+static char *proc_name[9999999]; // shared by shell loop parent and its sigchld handler
 void sigchld_handler(int sig)
 {
     int status;
