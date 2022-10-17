@@ -2,5 +2,5 @@
 !3230shell_3035782231.c
 !pipe.c
 !Makefile
-!t
 !Utility/*.c
+!compile_run.sh
