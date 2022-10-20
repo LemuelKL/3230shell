@@ -18,19 +18,10 @@ void close_fds(int fd[][2], int n)
 
 void pipe_expr(int fd[][2], int i, char **args, int pipe_cnt, int expr_cnt, int *expr_idx)
 {
-    if (i == 0) // first expr
-    {
-        dup2(fd[i][1], STDOUT_FILENO);
-    }
-    else if (i == expr_cnt - 1) // last expr
-    {
+    if (i != 0)
         dup2(fd[i - 1][0], STDIN_FILENO);
-    }
-    else // middle exprs
-    {
-        dup2(fd[i - 1][0], STDIN_FILENO);
+    if (i != expr_cnt - 1)
         dup2(fd[i][1], STDOUT_FILENO);
-    }
     close_fds(fd, pipe_cnt);
     if (execvp(args[expr_idx[i]], args + expr_idx[i]) == -1)
         printf("3230shell: '%s': %s\n", args[expr_idx[i]], strerror(errno));
