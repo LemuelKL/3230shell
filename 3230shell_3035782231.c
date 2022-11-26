@@ -98,6 +98,7 @@ void sigchld_handler(int sig)
             // background process
             printf("[%d] %s Done\n", pid, proc_name[pid]);
             waitpid(pid, &status, 0);
+            free(proc_name[pid]);
         }
         else
         {
@@ -353,7 +354,7 @@ int main(int argc, char **argv)
             }
 
             close(cmd_fd[1]);
-            char r_cmd[MAX_LINE_LEN + 1];
+            char *r_cmd = malloc(MAX_LINE_LEN + 1);
             read(cmd_fd[0], r_cmd, MAX_LINE_LEN + 1);
             close(cmd_fd[0]);
             if (bg_md)
@@ -364,6 +365,7 @@ int main(int argc, char **argv)
             else
             {
                 shell_wait(pid);
+                free(r_cmd);
             }
         }
     }
